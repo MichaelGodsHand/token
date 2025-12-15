@@ -61,19 +61,18 @@ app.post('/deploy-token', async (req, res) => {
   const factoryDir = path.join(rootDir, 'token-factory');
 
   try {
-    // 1) Deploy ERC20 contract using cargo-stylus
-    // We invoke bash so that `source` works; intended for Linux/Vast setup
-    const deployCmd = [
-      `cd "${erc20Dir.replace(/\\/g, '/')}"`,
-      `source ../../.env`,
-      'cargo stylus deploy \\',
-      '  --private-key="${PRIVATE_KEY}" \\',
-      '  --endpoint="${RPC_ENDPOINT}" \\',
-      '  --no-verify \\',
-      '  --max-fee-per-gas-gwei 0.1',
-    ].join(' && ');
+    // 1) Deploy ERC20 contract using cargo-stylus (Linux)
+    // Use a single-line command; no trailing backslashes to avoid bad args.
+    const deployCmd = `
+cd "${erc20Dir.replace(/\\/g, '/')}" && \
+source ../../.env && \
+cargo stylus deploy \
+  --private-key="$PRIVATE_KEY" \
+  --endpoint="$RPC_ENDPOINT" \
+  --no-verify \
+  --max-fee-per-gas-gwei 0.1`.trim();
 
-    const deployShell = `bash -lc '${deployCmd}'`;
+    const deployShell = `bash -lc "${deployCmd.replace(/"/g, '\\"')}"`;
 
     const deployResult = await runCommand(deployShell, { cwd: rootDir });
     const deployOutput = `${deployResult.stdout}\n${deployResult.stderr}`;
@@ -87,62 +86,58 @@ app.post('/deploy-token', async (req, res) => {
     }
 
     // 2) Activate the deployed token
-    const activateCmd = [
-      `cd "${erc20Dir.replace(/\\/g, '/')}"`,
-      `source ../../.env`,
-      `cargo stylus activate ${tokenAddress} \\`,
-      '  --private-key="${PRIVATE_KEY}" \\',
-      '  --endpoint="${RPC_ENDPOINT}" \\',
-      '  --max-fee-per-gas-gwei 0.1',
-    ].join(' && ');
+    const activateCmd = `
+cd "${erc20Dir.replace(/\\/g, '/')}" && \
+source ../../.env && \
+cargo stylus activate ${tokenAddress} \
+  --private-key="$PRIVATE_KEY" \
+  --endpoint="$RPC_ENDPOINT" \
+  --max-fee-per-gas-gwei 0.1`.trim();
 
-    const activateShell = `bash -lc '${activateCmd}'`;
+    const activateShell = `bash -lc "${activateCmd.replace(/"/g, '\\"')}"`;
     const activateResult = await runCommand(activateShell, { cwd: rootDir });
 
     // 3) Cache-bid (optional but recommended)
-    const cacheCmd = [
-      `cd "${erc20Dir.replace(/\\/g, '/')}"`,
-      `source ../../.env`,
-      `cargo stylus cache-bid ${tokenAddress} \\`,
-      '  --private-key="${PRIVATE_KEY}" \\',
-      '  --endpoint="${RPC_ENDPOINT}" \\',
-      '  --max-fee-per-gas-gwei 0.1',
-    ].join(' && ');
+    const cacheCmd = `
+cd "${erc20Dir.replace(/\\/g, '/')}" && \
+source ../../.env && \
+cargo stylus cache-bid ${tokenAddress} \
+  --private-key="$PRIVATE_KEY" \
+  --endpoint="$RPC_ENDPOINT" \
+  --max-fee-per-gas-gwei 0.1`.trim();
 
-    const cacheShell = `bash -lc '${cacheCmd}'`;
+    const cacheShell = `bash -lc "${cacheCmd.replace(/"/g, '\\"')}"`;
     const cacheResult = await runCommand(cacheShell, { cwd: rootDir });
 
     // 4) Initialize token via cast send
     // initialSupply is passed as human-readable whole units, contract multiplies by 10^18
-    const initCmd = [
-      `cd "${erc20Dir.replace(/\\/g, '/')}"`,
-      `source ../../.env`,
-      `cast send ${tokenAddress} \\`,
-      '  "init(string,string,uint256)" \\',
-      `  "${name}" "${symbol}" ${initialSupply} \\`,
-      '  --private-key="${PRIVATE_KEY}" \\',
-      '  --rpc-url "${RPC_ENDPOINT}" \\',
-      '  --max-fee-per-gas 0.1gwei',
-    ].join(' && ');
+    const initCmd = `
+cd "${erc20Dir.replace(/\\/g, '/')}" && \
+source ../../.env && \
+cast send ${tokenAddress} \
+  "init(string,string,uint256)" \
+  "${name}" "${symbol}" ${initialSupply} \
+  --private-key="$PRIVATE_KEY" \
+  --rpc-url "$RPC_ENDPOINT" \
+  --max-fee-per-gas 0.1gwei`.trim();
 
-    const initShell = `bash -lc '${initCmd}'`;
+    const initShell = `bash -lc "${initCmd.replace(/"/g, '\\"')}"`;
     const initResult = await runCommand(initShell, { cwd: rootDir });
 
     // 5) Register token in TokenFactory if factoryAddress is provided
     let registerResult = null;
     if (factoryAddress) {
-      const registerCmd = [
-        `cd "${factoryDir.replace(/\\/g, '/')}"`,
-        `source ../../.env`,
-        `cast send ${factoryAddress} \\`,
-        '  "register_token(address,string,string,uint256)" \\',
-        `  ${tokenAddress} "${name}" "${symbol}" ${initialSupply} \\`,
-        '  --private-key="${PRIVATE_KEY}" \\',
-        '  --rpc-url "${RPC_ENDPOINT}" \\',
-        '  --max-fee-per-gas 0.1gwei',
-      ].join(' && ');
+      const registerCmd = `
+cd "${factoryDir.replace(/\\/g, '/')}" && \
+source ../../.env && \
+cast send ${factoryAddress} \
+  "register_token(address,string,string,uint256)" \
+  ${tokenAddress} "${name}" "${symbol}" ${initialSupply} \
+  --private-key="$PRIVATE_KEY" \
+  --rpc-url "$RPC_ENDPOINT" \
+  --max-fee-per-gas 0.1gwei`.trim();
 
-      const registerShell = `bash -lc '${registerCmd}'`;
+      const registerShell = `bash -lc "${registerCmd.replace(/"/g, '\\"')}"`;
       registerResult = await runCommand(registerShell, { cwd: rootDir });
     }
 
