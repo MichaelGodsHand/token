@@ -111,11 +111,11 @@ cargo stylus activate \
       }
     }
 
-    // 3) Cache-bid (optional but recommended)
+    // 3) Cache (optional but recommended)
     const cacheCmd = `
 cd "${erc20Dir.replace(/\\/g, '/')}" && \
 source ../../.env && \
-cargo stylus cache-bid \
+cargo stylus cache \
   --address ${tokenAddress} \
   --private-key="$PRIVATE_KEY" \
   --endpoint="$RPC_ENDPOINT" \
