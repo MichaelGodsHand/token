@@ -97,7 +97,19 @@ cargo stylus activate \
   --max-fee-per-gas-gwei 0.1`.trim();
 
     const activateShell = `bash -lc "${activateCmd.replace(/"/g, '\\"')}"`;
-    const activateResult = await runCommand(activateShell, { cwd: rootDir });
+    let activateResult;
+    try {
+      activateResult = await runCommand(activateShell, { cwd: rootDir });
+    } catch (e) {
+      const stderr = e.stderr || '';
+      // If the program is already activated, cargo-stylus returns ProgramUpToDate().
+      // Treat that as a non-fatal condition and continue.
+      if (stderr.includes('ProgramUpToDate')) {
+        activateResult = { stdout: '', stderr };
+      } else {
+        throw e;
+      }
+    }
 
     // 3) Cache-bid (optional but recommended)
     const cacheCmd = `
