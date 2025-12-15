@@ -43,7 +43,12 @@ function extractContractAddress(output) {
 // POST /deploy-token
 // body: { name, symbol, initialSupply, factoryAddress }
 app.post('/deploy-token', async (req, res) => {
-  const { name, symbol, initialSupply, factoryAddress } = req.body || {};
+  let { name, symbol, initialSupply, factoryAddress } = req.body || {};
+
+  // Allow factory address to be configured via env as a default
+  if (!factoryAddress && process.env.FACTORY_ADDRESS) {
+    factoryAddress = process.env.FACTORY_ADDRESS;
+  }
 
   if (!name || !symbol || !initialSupply) {
     return res.status(400).json({ error: 'name, symbol and initialSupply are required' });
