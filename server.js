@@ -115,7 +115,7 @@ cargo stylus activate \
     const cacheCmd = `
 cd "${erc20Dir.replace(/\\/g, '/')}" && \
 source ../../.env && \
-cargo stylus cache \
+cargo stylus cache bid \
   --address ${tokenAddress} \
   --private-key="$PRIVATE_KEY" \
   --endpoint="$RPC_ENDPOINT" \
