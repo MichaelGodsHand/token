@@ -6,6 +6,8 @@ const path = require('path');
 
 dotenv.config({ path: path.join(__dirname, '.env') });
 
+const FACTORY_ADDRESS = '0xed088fd93517b0d0c3a3e4d2e2c419fb58570556';
+
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -45,9 +47,13 @@ function extractContractAddress(output) {
 app.post('/deploy-token', async (req, res) => {
   let { name, symbol, initialSupply, factoryAddress } = req.body || {};
 
-  // Allow factory address to be configured via env as a default
-  if (!factoryAddress && process.env.FACTORY_ADDRESS) {
-    factoryAddress = process.env.FACTORY_ADDRESS;
+  // Priority: explicit body param > env var > hardcoded default
+  if (!factoryAddress) {
+    if (process.env.FACTORY_ADDRESS) {
+      factoryAddress = process.env.FACTORY_ADDRESS;
+    } else {
+      factoryAddress = FACTORY_ADDRESS;
+    }
   }
 
   if (!name || !symbol || !initialSupply) {
