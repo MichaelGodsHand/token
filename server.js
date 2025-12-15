@@ -122,7 +122,18 @@ cargo stylus cache bid \
   --max-fee-per-gas-gwei 0.1`.trim();
 
     const cacheShell = `bash -lc "${cacheCmd.replace(/"/g, '\\"')}"`;
-    const cacheResult = await runCommand(cacheShell, { cwd: rootDir });
+    let cacheResult;
+    try {
+      cacheResult = await runCommand(cacheShell, { cwd: rootDir });
+    } catch (e) {
+      const stderr = e.stderr || '';
+      // If the contract is already cached, treat as non-fatal and continue.
+      if (stderr.includes('already cached')) {
+        cacheResult = { stdout: '', stderr };
+      } else {
+        throw e;
+      }
+    }
 
     // 4) Initialize token via cast send
     // initialSupply is passed as human-readable whole units, contract multiplies by 10^18
