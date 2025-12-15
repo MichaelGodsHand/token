@@ -86,10 +86,12 @@ cargo stylus deploy \
     }
 
     // 2) Activate the deployed token
+    // cargo-stylus expects the address via --address
     const activateCmd = `
 cd "${erc20Dir.replace(/\\/g, '/')}" && \
 source ../../.env && \
-cargo stylus activate ${tokenAddress} \
+cargo stylus activate \
+  --address ${tokenAddress} \
   --private-key="$PRIVATE_KEY" \
   --endpoint="$RPC_ENDPOINT" \
   --max-fee-per-gas-gwei 0.1`.trim();
@@ -101,7 +103,8 @@ cargo stylus activate ${tokenAddress} \
     const cacheCmd = `
 cd "${erc20Dir.replace(/\\/g, '/')}" && \
 source ../../.env && \
-cargo stylus cache-bid ${tokenAddress} \
+cargo stylus cache-bid \
+  --address ${tokenAddress} \
   --private-key="$PRIVATE_KEY" \
   --endpoint="$RPC_ENDPOINT" \
   --max-fee-per-gas-gwei 0.1`.trim();
