@@ -111,12 +111,12 @@ cargo stylus activate \
       }
     }
 
-    // 3) Cache (optional but recommended)
+    // 3) Cache-bid (optional but recommended)
     const cacheCmd = `
 cd "${erc20Dir.replace(/\\/g, '/')}" && \
 source ../../.env && \
 cargo stylus cache bid \
-  --address ${tokenAddress} \
+  ${tokenAddress} 1 \
   --private-key="$PRIVATE_KEY" \
   --endpoint="$RPC_ENDPOINT" \
   --max-fee-per-gas-gwei 0.1`.trim();
