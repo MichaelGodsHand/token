@@ -129,12 +129,12 @@ cargo stylus cache bid \
     const initCmd = `
 cd "${erc20Dir.replace(/\\/g, '/')}" && \
 source ../../.env && \
-cast send ${tokenAddress} \
-  "init(string,string,uint256)" \
-  "${name}" "${symbol}" ${initialSupply} \
+cast send \
   --private-key="$PRIVATE_KEY" \
   --rpc-url "$RPC_ENDPOINT" \
-  --max-fee-per-gas 0.1gwei`.trim();
+  ${tokenAddress} \
+  "init(string,string,uint256)" \
+  "${name}" "${symbol}" ${initialSupply}`.trim();
 
     const initShell = `bash -lc "${initCmd.replace(/"/g, '\\"')}"`;
     const initResult = await runCommand(initShell, { cwd: rootDir });
@@ -145,12 +145,12 @@ cast send ${tokenAddress} \
       const registerCmd = `
 cd "${factoryDir.replace(/\\/g, '/')}" && \
 source ../../.env && \
-cast send ${factoryAddress} \
-  "register_token(address,string,string,uint256)" \
-  ${tokenAddress} "${name}" "${symbol}" ${initialSupply} \
+cast send \
   --private-key="$PRIVATE_KEY" \
   --rpc-url "$RPC_ENDPOINT" \
-  --max-fee-per-gas 0.1gwei`.trim();
+  ${factoryAddress} \
+  "register_token(address,string,string,uint256)" \
+  ${tokenAddress} "${name}" "${symbol}" ${initialSupply}`.trim();
 
       const registerShell = `bash -lc "${registerCmd.replace(/"/g, '\\"')}"`;
       registerResult = await runCommand(registerShell, { cwd: rootDir });
