@@ -49,7 +49,8 @@ WORKDIR /workspace/token-factory
 RUN cargo build --target wasm32-unknown-unknown --release
 
 # Stage 2: Node.js runtime
-FROM node:20-slim
+# Use full node:20 image instead of slim to ensure GLIBC compatibility with cargo-stylus
+FROM node:20
 
 # Install runtime dependencies for Rust/Foundry tools
 RUN apt-get update && apt-get install -y \
@@ -96,8 +97,8 @@ COPY server.js ./
 COPY --from=rust-builder /workspace/erc20-token ./erc20-token
 COPY --from=rust-builder /workspace/token-factory ./token-factory
 
-# Copy cargo-stylus and Foundry binaries from builder stage
-COPY --from=rust-builder /usr/local/cargo/bin/cargo-stylus /root/.cargo/bin/cargo-stylus
+# Copy Foundry binaries from builder stage
+# Note: cargo-stylus is installed in this stage (line 76) to ensure GLIBC compatibility
 COPY --from=rust-builder /root/.foundry /root/.foundry
 
 # Copy Rust toolchain configs
