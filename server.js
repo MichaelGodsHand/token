@@ -160,12 +160,12 @@ cargo stylus cache bid \
 
     // 4) Initialize token via cast send
     // initialSupply is passed as human-readable whole units, contract multiplies by 10^18
+    // Gas pricing is handled automatically by cast send
     const initCmd = `
 cd "${erc20Dir.replace(/\\/g, "/")}" && \
 cast send \
   --private-key="${process.env.PRIVATE_KEY}" \
   --rpc-url "${process.env.RPC_ENDPOINT}" \
-  --max-fee-per-gas 0.2gwei \
   ${tokenAddress} \
   "init(string,string,uint256)" \
   "${name}" "${symbol}" ${initialSupply}`.trim();
@@ -307,12 +307,11 @@ cast call \
     }
 
     // Perform the actual registration
-    // Use --legacy flag if needed, and add verbose output for debugging
+    // Gas pricing is handled automatically by cast send
     const registerCmd = `
 cast send \
   --private-key="${process.env.PRIVATE_KEY}" \
   --rpc-url "${process.env.RPC_ENDPOINT}" \
-  --max-fee-per-gas 0.2gwei \
   ${factoryAddress} \
   "register_token(address,string,string,uint256)" \
   ${tokenAddress} "${name}" "${symbol}" ${initialSupply}`.trim();
