@@ -68,9 +68,17 @@ app.post("/deploy-token", async (req, res) => {
 
   if (!process.env.PRIVATE_KEY || !process.env.RPC_ENDPOINT) {
     return res.status(500).json({
-      error: "PRIVATE_KEY and RPC_ENDPOINT must be set in .env at project root",
+      error:
+        "PRIVATE_KEY and RPC_ENDPOINT must be set as environment variables",
     });
   }
+
+  // Prepare environment variables for child processes
+  const env = {
+    ...process.env,
+    PRIVATE_KEY: process.env.PRIVATE_KEY,
+    RPC_ENDPOINT: process.env.RPC_ENDPOINT,
+  };
 
   // Directories for contracts
   const rootDir = __dirname;
@@ -82,16 +90,15 @@ app.post("/deploy-token", async (req, res) => {
     // Use a single-line command; no trailing backslashes to avoid bad args.
     const deployCmd = `
 cd "${erc20Dir.replace(/\\/g, "/")}" && \
-source ../../.env && \
 cargo stylus deploy \
-  --private-key="$PRIVATE_KEY" \
-  --endpoint="$RPC_ENDPOINT" \
+  --private-key="${process.env.PRIVATE_KEY}" \
+  --endpoint="${process.env.RPC_ENDPOINT}" \
   --no-verify \
   --max-fee-per-gas-gwei 0.1`.trim();
 
     const deployShell = `bash -lc "${deployCmd.replace(/"/g, '\\"')}"`;
 
-    const deployResult = await runCommand(deployShell, { cwd: rootDir });
+    const deployResult = await runCommand(deployShell, { cwd: rootDir, env });
     const deployOutput = `${deployResult.stdout}\n${deployResult.stderr}`;
 
     const tokenAddress = extractContractAddress(deployOutput);
@@ -107,17 +114,16 @@ cargo stylus deploy \
     // cargo-stylus expects the address via --address
     const activateCmd = `
 cd "${erc20Dir.replace(/\\/g, "/")}" && \
-source ../../.env && \
 cargo stylus activate \
   --address ${tokenAddress} \
-  --private-key="$PRIVATE_KEY" \
-  --endpoint="$RPC_ENDPOINT" \
+  --private-key="${process.env.PRIVATE_KEY}" \
+  --endpoint="${process.env.RPC_ENDPOINT}" \
   --max-fee-per-gas-gwei 0.1`.trim();
 
     const activateShell = `bash -lc "${activateCmd.replace(/"/g, '\\"')}"`;
     let activateResult;
     try {
-      activateResult = await runCommand(activateShell, { cwd: rootDir });
+      activateResult = await runCommand(activateShell, { cwd: rootDir, env });
     } catch (e) {
       const stderr = e.stderr || "";
       // If the program is already activated, cargo-stylus returns ProgramUpToDate().
@@ -132,17 +138,16 @@ cargo stylus activate \
     // 3) Cache-bid (optional but recommended)
     const cacheCmd = `
 cd "${erc20Dir.replace(/\\/g, "/")}" && \
-source ../../.env && \
 cargo stylus cache bid \
   ${tokenAddress} 1 \
-  --private-key="$PRIVATE_KEY" \
-  --endpoint="$RPC_ENDPOINT" \
+  --private-key="${process.env.PRIVATE_KEY}" \
+  --endpoint="${process.env.RPC_ENDPOINT}" \
   --max-fee-per-gas-gwei 0.1`.trim();
 
     const cacheShell = `bash -lc "${cacheCmd.replace(/"/g, '\\"')}"`;
     let cacheResult;
     try {
-      cacheResult = await runCommand(cacheShell, { cwd: rootDir });
+      cacheResult = await runCommand(cacheShell, { cwd: rootDir, env });
     } catch (e) {
       const stderr = e.stderr || "";
       // If the contract is already cached, treat as non-fatal and continue.
@@ -157,32 +162,30 @@ cargo stylus cache bid \
     // initialSupply is passed as human-readable whole units, contract multiplies by 10^18
     const initCmd = `
 cd "${erc20Dir.replace(/\\/g, "/")}" && \
-source ../../.env && \
 cast send \
-  --private-key="$PRIVATE_KEY" \
-  --rpc-url "$RPC_ENDPOINT" \
+  --private-key="${process.env.PRIVATE_KEY}" \
+  --rpc-url "${process.env.RPC_ENDPOINT}" \
   ${tokenAddress} \
   "init(string,string,uint256)" \
   "${name}" "${symbol}" ${initialSupply}`.trim();
 
     const initShell = `bash -lc "${initCmd.replace(/"/g, '\\"')}"`;
-    const initResult = await runCommand(initShell, { cwd: rootDir });
+    const initResult = await runCommand(initShell, { cwd: rootDir, env });
 
     // 5) Register token in TokenFactory if factoryAddress is provided
     let registerResult = null;
     if (factoryAddress) {
       const registerCmd = `
 cd "${factoryDir.replace(/\\/g, "/")}" && \
-source ../../.env && \
 cast send \
-  --private-key="$PRIVATE_KEY" \
-  --rpc-url "$RPC_ENDPOINT" \
+  --private-key="${process.env.PRIVATE_KEY}" \
+  --rpc-url "${process.env.RPC_ENDPOINT}" \
   ${factoryAddress} \
   "register_token(address,string,string,uint256)" \
   ${tokenAddress} "${name}" "${symbol}" ${initialSupply}`.trim();
 
       const registerShell = `bash -lc "${registerCmd.replace(/"/g, '\\"')}"`;
-      registerResult = await runCommand(registerShell, { cwd: rootDir });
+      registerResult = await runCommand(registerShell, { cwd: rootDir, env });
     }
 
     return res.json({
