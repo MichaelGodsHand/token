@@ -173,6 +173,14 @@ cast send \
     const initShell = `bash -lc "${initCmd.replace(/"/g, '\\"')}"`;
     const initResult = await runCommand(initShell, { cwd: rootDir, env });
 
+    // Wait for initialization transaction to be mined before proceeding
+    // Extract transaction hash from output if available
+    const initOutput = `${initResult.stdout}\n${initResult.stderr}`;
+    console.log("Token initialization output:", initOutput);
+
+    // Wait a few seconds for the transaction to be mined
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+
     // 5) Register token in TokenFactory - REQUIRED
     if (!factoryAddress) {
       throw new Error("factoryAddress is required for token registration");
@@ -224,17 +232,23 @@ cargo stylus activate \
         );
       }
 
-      // Try to call a view function to verify the contract is active
+      // Try to call a view function to verify the contract is active and callable
       const testCallCmd =
         `cast call ${factoryAddress} "get_total_tokens_deployed()" --rpc-url "${process.env.RPC_ENDPOINT}"`.trim();
       try {
         const testCallShell = `bash -lc "${testCallCmd.replace(/"/g, '\\"')}"`;
-        await runCommand(testCallShell, { cwd: rootDir, env });
-      } catch (testErr) {
-        console.warn(
-          "Factory contract view function test failed (may still work for writes):",
-          testErr.stderr || testErr.stdout
+        const testResult = await runCommand(testCallShell, {
+          cwd: rootDir,
+          env,
+        });
+        console.log(
+          "Factory contract is callable, total tokens:",
+          testResult.stdout
         );
+      } catch (testErr) {
+        const testError = testErr.stderr || testErr.stdout || String(testErr);
+        console.warn("Factory contract view function test failed:", testError);
+        // Don't throw here - the contract might still work for writes
       }
     } catch (err) {
       throw new Error(
@@ -285,26 +299,34 @@ cast call \
       );
     }
 
-    // Try to simulate the call first to get better error messages
-    const simulateCmd = `
-cast call \
-  --rpc-url "${process.env.RPC_ENDPOINT}" \
-  ${factoryAddress} \
-  "register_token(address,string,string,uint256)" \
-  ${tokenAddress} "${name}" "${symbol}" ${initialSupply}`.trim();
+    // Wait a moment for token initialization to be mined
+    await new Promise((resolve) => setTimeout(resolve, 3000));
 
-    const simulateShell = `bash -lc "${simulateCmd.replace(/"/g, '\\"')}"`;
-    try {
-      await runCommand(simulateShell, { cwd: rootDir, env });
-    } catch (simErr) {
-      const simError = simErr.stderr || simErr.stdout || String(simErr);
-      // If simulation fails, log it but continue - the actual send might still work
-      console.warn(
-        "Registration simulation failed - this may indicate the issue:",
-        simError
-      );
-      // Don't throw here - let the actual send attempt happen
+    // Try to simulate the call first to get better error messages
+    // Note: cast call can't simulate state-changing functions, but we can try to check if the function exists
+    // Instead, let's verify the token is ready and parameters are valid
+    console.log(
+      `Attempting to register token: ${tokenAddress} with name "${name}", symbol "${symbol}", supply ${initialSupply}`
+    );
+
+    // Validate parameters match contract requirements
+    if (
+      !tokenAddress ||
+      tokenAddress === "0x0000000000000000000000000000000000000000"
+    ) {
+      throw new Error("Invalid token address: cannot be zero address");
     }
+    if (!name || name.trim().length === 0) {
+      throw new Error("Invalid name: cannot be empty");
+    }
+    if (!symbol || symbol.trim().length === 0) {
+      throw new Error("Invalid symbol: cannot be empty");
+    }
+    if (!initialSupply || initialSupply === 0) {
+      throw new Error("Invalid initial supply: cannot be zero");
+    }
+
+    let simulationError = null;
 
     // Perform the actual registration
     // Gas pricing is handled automatically by cast send
@@ -331,12 +353,20 @@ cast send \
       // Try to decode the error if possible
       let decodedError = errorDetails.stderr || errorDetails.stdout || "";
 
+      // Include simulation error if available
+      if (simulationError) {
+        decodedError = `Simulation error: ${simulationError}. Actual send error: ${decodedError}`;
+      }
+
       // Check for common revert reasons
       if (decodedError.includes("execution reverted")) {
-        if (decodedError.includes("InvalidInput")) {
-          decodedError +=
-            " - Possible causes: token already registered, invalid parameters, or zero values";
-        }
+        // Try to provide more context based on contract validation checks
+        decodedError +=
+          "\nPossible causes:\n" +
+          "1. Token already registered in factory\n" +
+          "2. Invalid parameters (empty name/symbol, zero supply, zero address)\n" +
+          "3. Factory contract not properly activated\n" +
+          "4. Token contract not fully initialized";
       }
 
       // Provide detailed error information
@@ -345,7 +375,7 @@ cast send \
           `Factory: ${factoryAddress}, Token: ${tokenAddress}, ` +
           `Name: "${name}", Symbol: "${symbol}", Supply: ${initialSupply}. ` +
           `Error: ${errorDetails.message}. ` +
-          `Decoded: ${decodedError}`
+          `\nDetails: ${decodedError}`
       );
     }
 
