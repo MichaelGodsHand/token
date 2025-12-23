@@ -1,12 +1,12 @@
-const express = require('express');
-const cors = require('cors');
-const dotenv = require('dotenv');
-const { exec } = require('child_process');
-const path = require('path');
+const express = require("express");
+const cors = require("cors");
+const dotenv = require("dotenv");
+const { exec } = require("child_process");
+const path = require("path");
 
-dotenv.config({ path: path.join(__dirname, '.env') });
+dotenv.config({ path: path.join(__dirname, ".env") });
 
-const FACTORY_ADDRESS = '0xed088fd93517b0d0c3a3e4d2e2c419fb58570556';
+const FACTORY_ADDRESS = "0xed088fd93517b0d0c3a3e4d2e2c419fb58570556";
 
 const app = express();
 app.use(cors());
@@ -14,9 +14,9 @@ app.use(express.json());
 
 // Handle invalid JSON bodies gracefully
 app.use((err, req, res, next) => {
-  if (err instanceof SyntaxError && 'body' in err) {
+  if (err instanceof SyntaxError && "body" in err) {
     return res.status(400).json({
-      error: 'Invalid JSON in request body',
+      error: "Invalid JSON in request body",
       details: err.message,
     });
   }
@@ -26,12 +26,16 @@ app.use((err, req, res, next) => {
 // Helper to run a shell command and capture stdout/stderr as a Promise
 function runCommand(command, options = {}) {
   return new Promise((resolve, reject) => {
-    exec(command, { ...options, maxBuffer: 1024 * 1024 * 10 }, (error, stdout, stderr) => {
-      if (error) {
-        return reject({ error, stdout, stderr });
+    exec(
+      command,
+      { ...options, maxBuffer: 1024 * 1024 * 10 },
+      (error, stdout, stderr) => {
+        if (error) {
+          return reject({ error, stdout, stderr });
+        }
+        resolve({ stdout, stderr });
       }
-      resolve({ stdout, stderr });
-    });
+    );
   });
 }
 
@@ -44,7 +48,7 @@ function extractContractAddress(output) {
 
 // POST /deploy-token
 // body: { name, symbol, initialSupply, factoryAddress }
-app.post('/deploy-token', async (req, res) => {
+app.post("/deploy-token", async (req, res) => {
   let { name, symbol, initialSupply, factoryAddress } = req.body || {};
 
   // Priority: explicit body param > env var > hardcoded default
@@ -57,25 +61,27 @@ app.post('/deploy-token', async (req, res) => {
   }
 
   if (!name || !symbol || !initialSupply) {
-    return res.status(400).json({ error: 'name, symbol and initialSupply are required' });
+    return res
+      .status(400)
+      .json({ error: "name, symbol and initialSupply are required" });
   }
 
   if (!process.env.PRIVATE_KEY || !process.env.RPC_ENDPOINT) {
     return res.status(500).json({
-      error: 'PRIVATE_KEY and RPC_ENDPOINT must be set in .env at project root',
+      error: "PRIVATE_KEY and RPC_ENDPOINT must be set in .env at project root",
     });
   }
 
   // Directories for contracts
   const rootDir = __dirname;
-  const erc20Dir = path.join(rootDir, 'erc20-token');
-  const factoryDir = path.join(rootDir, 'token-factory');
+  const erc20Dir = path.join(rootDir, "erc20-token");
+  const factoryDir = path.join(rootDir, "token-factory");
 
   try {
     // 1) Deploy ERC20 contract using cargo-stylus (Linux)
     // Use a single-line command; no trailing backslashes to avoid bad args.
     const deployCmd = `
-cd "${erc20Dir.replace(/\\/g, '/')}" && \
+cd "${erc20Dir.replace(/\\/g, "/")}" && \
 source ../../.env && \
 cargo stylus deploy \
   --private-key="$PRIVATE_KEY" \
@@ -91,7 +97,8 @@ cargo stylus deploy \
     const tokenAddress = extractContractAddress(deployOutput);
     if (!tokenAddress) {
       return res.status(500).json({
-        error: 'Failed to parse deployed token contract address from deploy output',
+        error:
+          "Failed to parse deployed token contract address from deploy output",
         deployOutput,
       });
     }
@@ -99,7 +106,7 @@ cargo stylus deploy \
     // 2) Activate the deployed token
     // cargo-stylus expects the address via --address
     const activateCmd = `
-cd "${erc20Dir.replace(/\\/g, '/')}" && \
+cd "${erc20Dir.replace(/\\/g, "/")}" && \
 source ../../.env && \
 cargo stylus activate \
   --address ${tokenAddress} \
@@ -112,11 +119,11 @@ cargo stylus activate \
     try {
       activateResult = await runCommand(activateShell, { cwd: rootDir });
     } catch (e) {
-      const stderr = e.stderr || '';
+      const stderr = e.stderr || "";
       // If the program is already activated, cargo-stylus returns ProgramUpToDate().
       // Treat that as a non-fatal condition and continue.
-      if (stderr.includes('ProgramUpToDate')) {
-        activateResult = { stdout: '', stderr };
+      if (stderr.includes("ProgramUpToDate")) {
+        activateResult = { stdout: "", stderr };
       } else {
         throw e;
       }
@@ -124,7 +131,7 @@ cargo stylus activate \
 
     // 3) Cache-bid (optional but recommended)
     const cacheCmd = `
-cd "${erc20Dir.replace(/\\/g, '/')}" && \
+cd "${erc20Dir.replace(/\\/g, "/")}" && \
 source ../../.env && \
 cargo stylus cache bid \
   ${tokenAddress} 1 \
@@ -137,10 +144,10 @@ cargo stylus cache bid \
     try {
       cacheResult = await runCommand(cacheShell, { cwd: rootDir });
     } catch (e) {
-      const stderr = e.stderr || '';
+      const stderr = e.stderr || "";
       // If the contract is already cached, treat as non-fatal and continue.
-      if (stderr.includes('already cached')) {
-        cacheResult = { stdout: '', stderr };
+      if (stderr.includes("already cached")) {
+        cacheResult = { stdout: "", stderr };
       } else {
         throw e;
       }
@@ -149,7 +156,7 @@ cargo stylus cache bid \
     // 4) Initialize token via cast send
     // initialSupply is passed as human-readable whole units, contract multiplies by 10^18
     const initCmd = `
-cd "${erc20Dir.replace(/\\/g, '/')}" && \
+cd "${erc20Dir.replace(/\\/g, "/")}" && \
 source ../../.env && \
 cast send \
   --private-key="$PRIVATE_KEY" \
@@ -165,7 +172,7 @@ cast send \
     let registerResult = null;
     if (factoryAddress) {
       const registerCmd = `
-cd "${factoryDir.replace(/\\/g, '/')}" && \
+cd "${factoryDir.replace(/\\/g, "/")}" && \
 source ../../.env && \
 cast send \
   --private-key="$PRIVATE_KEY" \
@@ -189,9 +196,9 @@ cast send \
         : null,
     });
   } catch (err) {
-    console.error('Deployment error:', err);
+    console.error("Deployment error:", err);
     return res.status(500).json({
-      error: 'Deployment flow failed',
+      error: "Deployment flow failed",
       details: {
         message: err.error ? err.error.message : String(err),
         stdout: err.stdout,
@@ -201,9 +208,12 @@ cast send \
   }
 });
 
+// Health check endpoint for Cloud Run
+app.get("/health", (req, res) => {
+  res.status(200).json({ status: "ok", timestamp: new Date().toISOString() });
+});
+
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => {
   console.log(`Deployment API server running on port ${PORT}`);
 });
-
-
