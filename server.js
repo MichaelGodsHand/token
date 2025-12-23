@@ -172,20 +172,181 @@ cast send \
     const initShell = `bash -lc "${initCmd.replace(/"/g, '\\"')}"`;
     const initResult = await runCommand(initShell, { cwd: rootDir, env });
 
-    // 5) Register token in TokenFactory if factoryAddress is provided
-    let registerResult = null;
-    if (factoryAddress) {
-      const registerCmd = `
+    // 5) Register token in TokenFactory - REQUIRED
+    if (!factoryAddress) {
+      throw new Error("factoryAddress is required for token registration");
+    }
+
+    // Ensure factory contract is activated (Stylus contracts need activation)
+    const factoryActivateCmd = `
 cd "${factoryDir.replace(/\\/g, "/")}" && \
-cast send \
+cargo stylus activate \
+  --address ${factoryAddress} \
   --private-key="${process.env.PRIVATE_KEY}" \
+  --endpoint="${process.env.RPC_ENDPOINT}" \
+  --max-fee-per-gas-gwei 0.1`.trim();
+
+    const factoryActivateShell = `bash -lc "${factoryActivateCmd.replace(
+      /"/g,
+      '\\"'
+    )}"`;
+    try {
+      await runCommand(factoryActivateShell, { cwd: rootDir, env });
+    } catch (e) {
+      const stderr = e.stderr || "";
+      // If already activated, continue - this is fine
+      if (
+        !stderr.includes("ProgramUpToDate") &&
+        !stderr.includes("already activated")
+      ) {
+        console.warn(
+          "Factory activation attempt failed (may already be activated):",
+          stderr
+        );
+      }
+    }
+
+    // Verify factory contract exists and is callable
+    const codeCheckCmd =
+      `cast code ${factoryAddress} --rpc-url "${process.env.RPC_ENDPOINT}"`.trim();
+    try {
+      const codeCheckShell = `bash -lc "${codeCheckCmd.replace(/"/g, '\\"')}"`;
+      const codeResult = await runCommand(codeCheckShell, {
+        cwd: rootDir,
+        env,
+      });
+      const codeOutput = `${codeResult.stdout}\n${codeResult.stderr}`.trim();
+      // Check if code is empty or just "0x"
+      if (!codeOutput || codeOutput === "0x" || codeOutput.length <= 2) {
+        throw new Error(
+          `Factory contract has no code at address ${factoryAddress}. Contract may not be deployed.`
+        );
+      }
+
+      // Try to call a view function to verify the contract is active
+      const testCallCmd =
+        `cast call ${factoryAddress} "get_total_tokens_deployed()" --rpc-url "${process.env.RPC_ENDPOINT}"`.trim();
+      try {
+        const testCallShell = `bash -lc "${testCallCmd.replace(/"/g, '\\"')}"`;
+        await runCommand(testCallShell, { cwd: rootDir, env });
+      } catch (testErr) {
+        console.warn(
+          "Factory contract view function test failed (may still work for writes):",
+          testErr.stderr || testErr.stdout
+        );
+      }
+    } catch (err) {
+      throw new Error(
+        `Factory contract verification failed at ${factoryAddress}: ${
+          err.message || err.stderr || err.stdout
+        }. ` + `Please ensure the factory contract is deployed and activated.`
+      );
+    }
+
+    // Check if token is already registered (optional check to provide better error messages)
+    try {
+      const checkTokenCmd = `
+cast call \
+  --rpc-url "${process.env.RPC_ENDPOINT}" \
+  ${factoryAddress} \
+  "get_token_info(address)" \
+  ${tokenAddress}`.trim();
+
+      const checkTokenShell = `bash -lc "${checkTokenCmd.replace(
+        /"/g,
+        '\\"'
+      )}"`;
+      const checkResult = await runCommand(checkTokenShell, {
+        cwd: rootDir,
+        env,
+      });
+      const checkOutput = `${checkResult.stdout}\n${checkResult.stderr}`;
+
+      // If call succeeds, token is already registered
+      if (
+        checkOutput &&
+        !checkOutput.includes("TokenNotFound") &&
+        !checkOutput.includes("error")
+      ) {
+        throw new Error(
+          `Token ${tokenAddress} is already registered in factory. ` +
+            `Cannot register the same token twice.`
+        );
+      }
+    } catch (checkErr) {
+      // If it's our custom error about already registered, throw it
+      if (checkErr.message && checkErr.message.includes("already registered")) {
+        throw checkErr;
+      }
+      // Otherwise, TokenNotFound is expected for new tokens - continue
+      console.log(
+        "Token not found in factory (expected for new tokens), proceeding with registration"
+      );
+    }
+
+    // Try to simulate the call first to get better error messages
+    const simulateCmd = `
+cast call \
   --rpc-url "${process.env.RPC_ENDPOINT}" \
   ${factoryAddress} \
   "register_token(address,string,string,uint256)" \
   ${tokenAddress} "${name}" "${symbol}" ${initialSupply}`.trim();
 
-      const registerShell = `bash -lc "${registerCmd.replace(/"/g, '\\"')}"`;
+    const simulateShell = `bash -lc "${simulateCmd.replace(/"/g, '\\"')}"`;
+    try {
+      await runCommand(simulateShell, { cwd: rootDir, env });
+    } catch (simErr) {
+      const simError = simErr.stderr || simErr.stdout || String(simErr);
+      // If simulation fails, log it but continue - the actual send might still work
+      console.warn(
+        "Registration simulation failed - this may indicate the issue:",
+        simError
+      );
+      // Don't throw here - let the actual send attempt happen
+    }
+
+    // Perform the actual registration
+    // Use --legacy flag if needed, and add verbose output for debugging
+    const registerCmd = `
+cast send \
+  --private-key="${process.env.PRIVATE_KEY}" \
+  --rpc-url "${process.env.RPC_ENDPOINT}" \
+  --legacy \
+  ${factoryAddress} \
+  "register_token(address,string,string,uint256)" \
+  ${tokenAddress} "${name}" "${symbol}" ${initialSupply}`.trim();
+
+    const registerShell = `bash -lc "${registerCmd.replace(/"/g, '\\"')}"`;
+    let registerResult;
+    try {
       registerResult = await runCommand(registerShell, { cwd: rootDir, env });
+    } catch (err) {
+      const errorDetails = {
+        message: err.error ? err.error.message : String(err),
+        stdout: err.stdout || "",
+        stderr: err.stderr || "",
+      };
+      console.error("Token registration failed:", errorDetails);
+
+      // Try to decode the error if possible
+      let decodedError = errorDetails.stderr || errorDetails.stdout || "";
+
+      // Check for common revert reasons
+      if (decodedError.includes("execution reverted")) {
+        if (decodedError.includes("InvalidInput")) {
+          decodedError +=
+            " - Possible causes: token already registered, invalid parameters, or zero values";
+        }
+      }
+
+      // Provide detailed error information
+      throw new Error(
+        `Token registration FAILED (required step). ` +
+          `Factory: ${factoryAddress}, Token: ${tokenAddress}, ` +
+          `Name: "${name}", Symbol: "${symbol}", Supply: ${initialSupply}. ` +
+          `Error: ${errorDetails.message}. ` +
+          `Decoded: ${decodedError}`
+      );
     }
 
     return res.json({
@@ -194,9 +355,9 @@ cast send \
       activateOutput: `${activateResult.stdout}\n${activateResult.stderr}`,
       cacheOutput: `${cacheResult.stdout}\n${cacheResult.stderr}`,
       initOutput: `${initResult.stdout}\n${initResult.stderr}`,
-      registerOutput: registerResult
-        ? `${registerResult.stdout}\n${registerResult.stderr}`
-        : null,
+      registerOutput: `${registerResult.stdout}\n${registerResult.stderr}`,
+      success: true,
+      message: "Token deployed and registered successfully",
     });
   } catch (err) {
     console.error("Deployment error:", err);
