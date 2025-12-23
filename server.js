@@ -234,8 +234,60 @@ cargo stylus activate \
       console.warn("Factory verification skipped:", err.message || "timeout");
     }
 
-    // Skip token registration check - it's slow and registration will fail fast if already registered
-    // The registration itself will provide a clear error if token is already registered
+    // Check if token is already registered - if so, skip registration
+    try {
+      const checkTokenCmd = `
+cast call \
+  --rpc-url "${process.env.RPC_ENDPOINT}" \
+  ${factoryAddress} \
+  "getTokenInfo(address)" \
+  ${tokenAddress}`.trim();
+
+      const checkTokenShell = `bash -lc "${checkTokenCmd.replace(
+        /"/g,
+        '\\"'
+      )}"`;
+      const checkResult = await Promise.race([
+        runCommand(checkTokenShell, { cwd: rootDir, env }),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("Check timeout")), 5000)
+        ),
+      ]);
+
+      const checkOutput = `${checkResult.stdout}\n${checkResult.stderr}`;
+
+      // If call succeeds and returns data, token is already registered
+      if (
+        checkOutput &&
+        !checkOutput.includes("TokenNotFound") &&
+        !checkOutput.includes("error") &&
+        checkOutput.trim().length > 0
+      ) {
+        console.log(
+          "Token is already registered in factory - skipping registration"
+        );
+        // Return success since token is already registered
+        return res.json({
+          tokenAddress,
+          deployOutput,
+          activateOutput: `${activateResult.stdout}\n${activateResult.stderr}`,
+          cacheOutput: `${cacheResult.stdout}\n${cacheResult.stderr}`,
+          initOutput: `${initResult.stdout}\n${initResult.stderr}`,
+          registerOutput: "Token already registered - skipped",
+          success: true,
+          message: "Token deployed and already registered in factory",
+          alreadyRegistered: true,
+        });
+      }
+    } catch (checkErr) {
+      // TokenNotFound is expected for new tokens - continue with registration
+      if (!checkErr.stderr || !checkErr.stderr.includes("TokenNotFound")) {
+        console.warn(
+          "Could not verify registration status, proceeding:",
+          checkErr.message
+        );
+      }
+    }
 
     // Skip token verification - it's slow and we just deployed it, so it should exist
     // Registration will fail fast with a clear error if token doesn't exist
@@ -279,7 +331,7 @@ cast send \
   --private-key="${process.env.PRIVATE_KEY}" \
   --rpc-url "${process.env.RPC_ENDPOINT}" \
   ${factoryAddress} \
-  "register_token(address,string,string,uint256)" \
+  "registerToken(address,string,string,uint256)" \
   ${tokenAddress} "${name}" "${symbol}" ${initialSupplyWei}`.trim();
 
     const registerShell = `bash -lc "${registerCmd.replace(/"/g, '\\"')}"`;
