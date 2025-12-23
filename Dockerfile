@@ -1,6 +1,7 @@
 # Multi-stage Dockerfile for Stylus Token Deployment Service
 # Stage 1: Build Rust contracts
-FROM rust:1.80-slim as rust-builder
+# Use latest stable Rust for cargo-stylus compatibility
+FROM rust:latest as rust-builder
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y \
@@ -14,10 +15,15 @@ RUN apt-get update && apt-get install -y \
 ENV CARGO_HOME=/usr/local/cargo
 ENV PATH=$CARGO_HOME/bin:$PATH
 
-# Install wasm32-unknown-unknown target
+# Install Rust 1.80.0 toolchain (as specified in rust-toolchain.toml)
+# but keep latest for cargo-stylus installation
+RUN rustup toolchain install 1.80.0-x86_64-unknown-linux-gnu
+RUN rustup target add wasm32-unknown-unknown --toolchain 1.80.0-x86_64-unknown-linux-gnu
+
+# Install wasm32-unknown-unknown target for default toolchain (for cargo-stylus)
 RUN rustup target add wasm32-unknown-unknown
 
-# Install cargo-stylus
+# Install cargo-stylus using latest Rust toolchain
 RUN cargo install cargo-stylus
 RUN cargo stylus -V
 
@@ -33,7 +39,9 @@ COPY erc20-token/ ./erc20-token/
 COPY token-factory/ ./token-factory/
 
 # Build contracts (pre-compile for faster startup)
+# Use Rust 1.80.0 as specified in rust-toolchain.toml
 WORKDIR /workspace/erc20-token
+RUN rustup default 1.80.0-x86_64-unknown-linux-gnu
 RUN cargo build --target wasm32-unknown-unknown --release
 
 WORKDIR /workspace/token-factory
@@ -51,14 +59,18 @@ RUN apt-get update && apt-get install -y \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Rust toolchain
+# Install Rust toolchain (latest stable for cargo-stylus)
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 ENV PATH="/root/.cargo/bin:${PATH}"
 
-# Install wasm32-unknown-unknown target
+# Install Rust 1.80.0 toolchain (as specified in rust-toolchain.toml)
+RUN rustup toolchain install 1.80.0-x86_64-unknown-linux-gnu
+RUN rustup target add wasm32-unknown-unknown --toolchain 1.80.0-x86_64-unknown-linux-gnu
+
+# Install wasm32-unknown-unknown target for default toolchain
 RUN rustup target add wasm32-unknown-unknown
 
-# Install cargo-stylus
+# Install cargo-stylus using latest Rust toolchain
 RUN cargo install cargo-stylus
 
 # Install Foundry
@@ -81,6 +93,9 @@ COPY server.js ./
 # Copy Rust contracts from builder stage
 COPY --from=rust-builder /workspace/erc20-token ./erc20-token
 COPY --from=rust-builder /workspace/token-factory ./token-factory
+
+# Copy cargo-stylus binary from builder stage
+COPY --from=rust-builder /usr/local/cargo/bin/cargo-stylus /root/.cargo/bin/cargo-stylus
 
 # Copy Rust toolchain configs
 COPY erc20-token/rust-toolchain.toml ./erc20-token/
