@@ -6,6 +6,7 @@ FROM rust:latest as rust-builder
 # Install build dependencies
 RUN apt-get update && apt-get install -y \
     curl \
+    git \
     build-essential \
     pkg-config \
     libssl-dev \
@@ -28,9 +29,9 @@ RUN cargo install cargo-stylus
 RUN cargo stylus -V
 
 # Install Foundry
-RUN curl -L https://foundry.paradigm.xyz | bash && \
-    /root/.foundry/bin/foundryup
+RUN curl -L https://foundry.paradigm.xyz | bash
 ENV PATH="/root/.foundry/bin:${PATH}"
+RUN /root/.foundry/bin/foundryup
 RUN cast --version
 
 # Copy Rust project files
@@ -53,6 +54,7 @@ FROM node:20-slim
 # Install runtime dependencies for Rust/Foundry tools
 RUN apt-get update && apt-get install -y \
     curl \
+    git \
     build-essential \
     pkg-config \
     libssl-dev \
@@ -74,9 +76,9 @@ RUN rustup target add wasm32-unknown-unknown
 RUN cargo install cargo-stylus
 
 # Install Foundry
-RUN curl -L https://foundry.paradigm.xyz | bash && \
-    /root/.foundry/bin/foundryup
+RUN curl -L https://foundry.paradigm.xyz | bash
 ENV PATH="/root/.foundry/bin:${PATH}"
+RUN /root/.foundry/bin/foundryup
 
 # Set working directory
 WORKDIR /workspace
