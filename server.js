@@ -178,8 +178,35 @@ cast send \
     const initOutput = `${initResult.stdout}\n${initResult.stderr}`;
     console.log("Token initialization output:", initOutput);
 
-    // Wait a few seconds for the transaction to be mined
-    await new Promise((resolve) => setTimeout(resolve, 3000));
+    // Extract transaction hash and wait for confirmation
+    const txHashMatch = initOutput.match(/0x[a-fA-F0-9]{64}/);
+    if (txHashMatch) {
+      const txHash = txHashMatch[0];
+      console.log(`Waiting for transaction ${txHash} to be confirmed...`);
+
+      // Wait for transaction to be mined (Arbitrum is fast, but give it time)
+      await new Promise((resolve) => setTimeout(resolve, 5000));
+
+      // Try to check if transaction is confirmed
+      try {
+        const receiptCmd =
+          `cast receipt ${txHash} --rpc-url "${process.env.RPC_ENDPOINT}"`.trim();
+        const receiptShell = `bash -lc "${receiptCmd.replace(/"/g, '\\"')}"`;
+        await runCommand(receiptShell, { cwd: rootDir, env });
+        console.log(`Transaction ${txHash} confirmed`);
+      } catch (receiptErr) {
+        console.warn(
+          "Could not verify transaction receipt, but continuing:",
+          receiptErr.stderr || receiptErr.stdout
+        );
+        // Wait a bit more just in case
+        await new Promise((resolve) => setTimeout(resolve, 3000));
+      }
+    } else {
+      // If no hash found, just wait a bit
+      console.warn("Could not extract transaction hash, waiting default time");
+      await new Promise((resolve) => setTimeout(resolve, 5000));
+    }
 
     // 5) Register token in TokenFactory - REQUIRED
     if (!factoryAddress) {
@@ -299,8 +326,33 @@ cast call \
       );
     }
 
-    // Wait a moment for token initialization to be mined
-    await new Promise((resolve) => setTimeout(resolve, 3000));
+    // Verify token contract is callable before registration
+    try {
+      const tokenCheckCmd =
+        `cast code ${tokenAddress} --rpc-url "${process.env.RPC_ENDPOINT}"`.trim();
+      const tokenCheckShell = `bash -lc "${tokenCheckCmd.replace(
+        /"/g,
+        '\\"'
+      )}"`;
+      const tokenCodeResult = await runCommand(tokenCheckShell, {
+        cwd: rootDir,
+        env,
+      });
+      const tokenCode =
+        `${tokenCodeResult.stdout}\n${tokenCodeResult.stderr}`.trim();
+      if (!tokenCode || tokenCode === "0x" || tokenCode.length <= 2) {
+        throw new Error(
+          `Token contract has no code at ${tokenAddress}. Token may not be deployed or activated.`
+        );
+      }
+      console.log(`Token contract verified at ${tokenAddress}`);
+    } catch (tokenCheckErr) {
+      throw new Error(
+        `Token contract verification failed: ${
+          tokenCheckErr.message || tokenCheckErr.stderr || tokenCheckErr.stdout
+        }. ` + `Cannot register token that doesn't exist.`
+      );
+    }
 
     // Try to simulate the call first to get better error messages
     // Note: cast call can't simulate state-changing functions, but we can try to check if the function exists
@@ -328,7 +380,42 @@ cast call \
 
     let simulationError = null;
 
+    // Convert initialSupply to wei for simulation as well
+    const initialSupplyWeiForSim =
+      BigInt(initialSupply) * BigInt(10) ** BigInt(18);
+
+    // Try to simulate the transaction using cast run to get detailed trace and error information
+    const simulateRunCmd = `
+cast run \
+  --rpc-url "${process.env.RPC_ENDPOINT}" \
+  --private-key "${process.env.PRIVATE_KEY}" \
+  ${factoryAddress} \
+  "register_token(address,string,string,uint256)" \
+  ${tokenAddress} "${name}" "${symbol}" ${initialSupplyWeiForSim} \
+  --trace`.trim();
+
+    try {
+      const simulateRunShell = `bash -lc "${simulateRunCmd.replace(
+        /"/g,
+        '\\"'
+      )}"`;
+      await runCommand(simulateRunShell, { cwd: rootDir, env });
+      console.log("Transaction simulation successful - should proceed");
+    } catch (simErr) {
+      simulationError = `${simErr.stderr || ""}\n${simErr.stdout || ""}`.trim();
+      console.error(
+        "Transaction simulation failed with trace:",
+        simulationError
+      );
+      // Don't throw yet - let the actual send attempt happen to get the full error
+    }
+
     // Perform the actual registration
+    // IMPORTANT: The factory expects initialSupply in wei (like the token's totalSupply)
+    // Convert human-readable supply to wei (multiply by 10^18)
+    // The token's init() multiplies by 10^18, so the factory should store the same wei amount
+    const initialSupplyWei = BigInt(initialSupply) * BigInt(10) ** BigInt(18);
+
     // Gas pricing is handled automatically by cast send
     const registerCmd = `
 cast send \
@@ -336,7 +423,7 @@ cast send \
   --rpc-url "${process.env.RPC_ENDPOINT}" \
   ${factoryAddress} \
   "register_token(address,string,string,uint256)" \
-  ${tokenAddress} "${name}" "${symbol}" ${initialSupply}`.trim();
+  ${tokenAddress} "${name}" "${symbol}" ${initialSupplyWei}`.trim();
 
     const registerShell = `bash -lc "${registerCmd.replace(/"/g, '\\"')}"`;
     let registerResult;
