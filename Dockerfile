@@ -28,9 +28,9 @@ RUN cargo install cargo-stylus
 RUN cargo stylus -V
 
 # Install Foundry
-RUN curl -L https://foundry.paradigm.xyz | bash
+RUN curl -L https://foundry.paradigm.xyz | bash && \
+    /root/.foundry/bin/foundryup
 ENV PATH="/root/.foundry/bin:${PATH}"
-RUN foundryup
 RUN cast --version
 
 # Copy Rust project files
@@ -74,9 +74,9 @@ RUN rustup target add wasm32-unknown-unknown
 RUN cargo install cargo-stylus
 
 # Install Foundry
-RUN curl -L https://foundry.paradigm.xyz | bash
+RUN curl -L https://foundry.paradigm.xyz | bash && \
+    /root/.foundry/bin/foundryup
 ENV PATH="/root/.foundry/bin:${PATH}"
-RUN foundryup
 
 # Set working directory
 WORKDIR /workspace
@@ -94,8 +94,9 @@ COPY server.js ./
 COPY --from=rust-builder /workspace/erc20-token ./erc20-token
 COPY --from=rust-builder /workspace/token-factory ./token-factory
 
-# Copy cargo-stylus binary from builder stage
+# Copy cargo-stylus and Foundry binaries from builder stage
 COPY --from=rust-builder /usr/local/cargo/bin/cargo-stylus /root/.cargo/bin/cargo-stylus
+COPY --from=rust-builder /root/.foundry /root/.foundry
 
 # Copy Rust toolchain configs
 COPY erc20-token/rust-toolchain.toml ./erc20-token/
