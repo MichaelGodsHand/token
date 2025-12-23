@@ -173,40 +173,10 @@ cast send \
     const initShell = `bash -lc "${initCmd.replace(/"/g, '\\"')}"`;
     const initResult = await runCommand(initShell, { cwd: rootDir, env });
 
-    // Wait for initialization transaction to be mined before proceeding
-    // Extract transaction hash from output if available
-    const initOutput = `${initResult.stdout}\n${initResult.stderr}`;
-    console.log("Token initialization output:", initOutput);
-
-    // Extract transaction hash and wait for confirmation
-    const txHashMatch = initOutput.match(/0x[a-fA-F0-9]{64}/);
-    if (txHashMatch) {
-      const txHash = txHashMatch[0];
-      console.log(`Waiting for transaction ${txHash} to be confirmed...`);
-
-      // Wait for transaction to be mined (Arbitrum is fast, but give it time)
-      await new Promise((resolve) => setTimeout(resolve, 5000));
-
-      // Try to check if transaction is confirmed
-      try {
-        const receiptCmd =
-          `cast receipt ${txHash} --rpc-url "${process.env.RPC_ENDPOINT}"`.trim();
-        const receiptShell = `bash -lc "${receiptCmd.replace(/"/g, '\\"')}"`;
-        await runCommand(receiptShell, { cwd: rootDir, env });
-        console.log(`Transaction ${txHash} confirmed`);
-      } catch (receiptErr) {
-        console.warn(
-          "Could not verify transaction receipt, but continuing:",
-          receiptErr.stderr || receiptErr.stdout
-        );
-        // Wait a bit more just in case
-        await new Promise((resolve) => setTimeout(resolve, 3000));
-      }
-    } else {
-      // If no hash found, just wait a bit
-      console.warn("Could not extract transaction hash, waiting default time");
-      await new Promise((resolve) => setTimeout(resolve, 5000));
-    }
+    // Wait briefly for initialization transaction to be submitted
+    // Arbitrum is fast, but we just need to ensure the transaction is in the mempool
+    // Don't wait for full confirmation - registration can proceed once tx is submitted
+    await new Promise((resolve) => setTimeout(resolve, 2000));
 
     // 5) Register token in TokenFactory - REQUIRED
     if (!factoryAddress) {
@@ -214,6 +184,7 @@ cast send \
     }
 
     // Ensure factory contract is activated (Stylus contracts need activation)
+    // Run this in parallel/non-blocking - if it fails, we'll catch it during registration
     const factoryActivateCmd = `
 cd "${factoryDir.replace(/\\/g, "/")}" && \
 cargo stylus activate \
@@ -226,31 +197,31 @@ cargo stylus activate \
       /"/g,
       '\\"'
     )}"`;
-    try {
-      await runCommand(factoryActivateShell, { cwd: rootDir, env });
-    } catch (e) {
+
+    // Don't wait for activation - run it but don't block on it
+    // If factory isn't activated, registration will fail with a clear error
+    runCommand(factoryActivateShell, { cwd: rootDir, env }).catch((e) => {
       const stderr = e.stderr || "";
-      // If already activated, continue - this is fine
+      // Only log if it's a real error (not "already activated")
       if (
         !stderr.includes("ProgramUpToDate") &&
         !stderr.includes("already activated")
       ) {
-        console.warn(
-          "Factory activation attempt failed (may already be activated):",
-          stderr
-        );
+        console.warn("Factory activation check:", stderr.substring(0, 200));
       }
-    }
+    });
 
-    // Verify factory contract exists and is callable
+    // Quick factory contract verification (non-blocking, timeout after 5 seconds)
     const codeCheckCmd =
       `cast code ${factoryAddress} --rpc-url "${process.env.RPC_ENDPOINT}"`.trim();
     try {
       const codeCheckShell = `bash -lc "${codeCheckCmd.replace(/"/g, '\\"')}"`;
-      const codeResult = await runCommand(codeCheckShell, {
-        cwd: rootDir,
-        env,
-      });
+      const codeResult = await Promise.race([
+        runCommand(codeCheckShell, { cwd: rootDir, env }),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("Code check timeout")), 5000)
+        ),
+      ]);
       const codeOutput = `${codeResult.stdout}\n${codeResult.stderr}`.trim();
       // Check if code is empty or just "0x"
       if (!codeOutput || codeOutput === "0x" || codeOutput.length <= 2) {
@@ -258,101 +229,16 @@ cargo stylus activate \
           `Factory contract has no code at address ${factoryAddress}. Contract may not be deployed.`
         );
       }
-
-      // Try to call a view function to verify the contract is active and callable
-      const testCallCmd =
-        `cast call ${factoryAddress} "get_total_tokens_deployed()" --rpc-url "${process.env.RPC_ENDPOINT}"`.trim();
-      try {
-        const testCallShell = `bash -lc "${testCallCmd.replace(/"/g, '\\"')}"`;
-        const testResult = await runCommand(testCallShell, {
-          cwd: rootDir,
-          env,
-        });
-        console.log(
-          "Factory contract is callable, total tokens:",
-          testResult.stdout
-        );
-      } catch (testErr) {
-        const testError = testErr.stderr || testErr.stdout || String(testErr);
-        console.warn("Factory contract view function test failed:", testError);
-        // Don't throw here - the contract might still work for writes
-      }
     } catch (err) {
-      throw new Error(
-        `Factory contract verification failed at ${factoryAddress}: ${
-          err.message || err.stderr || err.stdout
-        }. ` + `Please ensure the factory contract is deployed and activated.`
-      );
+      // If verification fails or times out, log but continue - registration will fail with better error
+      console.warn("Factory verification skipped:", err.message || "timeout");
     }
 
-    // Check if token is already registered (optional check to provide better error messages)
-    try {
-      const checkTokenCmd = `
-cast call \
-  --rpc-url "${process.env.RPC_ENDPOINT}" \
-  ${factoryAddress} \
-  "get_token_info(address)" \
-  ${tokenAddress}`.trim();
+    // Skip token registration check - it's slow and registration will fail fast if already registered
+    // The registration itself will provide a clear error if token is already registered
 
-      const checkTokenShell = `bash -lc "${checkTokenCmd.replace(
-        /"/g,
-        '\\"'
-      )}"`;
-      const checkResult = await runCommand(checkTokenShell, {
-        cwd: rootDir,
-        env,
-      });
-      const checkOutput = `${checkResult.stdout}\n${checkResult.stderr}`;
-
-      // If call succeeds, token is already registered
-      if (
-        checkOutput &&
-        !checkOutput.includes("TokenNotFound") &&
-        !checkOutput.includes("error")
-      ) {
-        throw new Error(
-          `Token ${tokenAddress} is already registered in factory. ` +
-            `Cannot register the same token twice.`
-        );
-      }
-    } catch (checkErr) {
-      // If it's our custom error about already registered, throw it
-      if (checkErr.message && checkErr.message.includes("already registered")) {
-        throw checkErr;
-      }
-      // Otherwise, TokenNotFound is expected for new tokens - continue
-      console.log(
-        "Token not found in factory (expected for new tokens), proceeding with registration"
-      );
-    }
-
-    // Verify token contract is callable before registration
-    try {
-      const tokenCheckCmd =
-        `cast code ${tokenAddress} --rpc-url "${process.env.RPC_ENDPOINT}"`.trim();
-      const tokenCheckShell = `bash -lc "${tokenCheckCmd.replace(
-        /"/g,
-        '\\"'
-      )}"`;
-      const tokenCodeResult = await runCommand(tokenCheckShell, {
-        cwd: rootDir,
-        env,
-      });
-      const tokenCode =
-        `${tokenCodeResult.stdout}\n${tokenCodeResult.stderr}`.trim();
-      if (!tokenCode || tokenCode === "0x" || tokenCode.length <= 2) {
-        throw new Error(
-          `Token contract has no code at ${tokenAddress}. Token may not be deployed or activated.`
-        );
-      }
-      console.log(`Token contract verified at ${tokenAddress}`);
-    } catch (tokenCheckErr) {
-      throw new Error(
-        `Token contract verification failed: ${
-          tokenCheckErr.message || tokenCheckErr.stderr || tokenCheckErr.stdout
-        }. ` + `Cannot register token that doesn't exist.`
-      );
-    }
+    // Skip token verification - it's slow and we just deployed it, so it should exist
+    // Registration will fail fast with a clear error if token doesn't exist
 
     // Try to simulate the call first to get better error messages
     // Note: cast call can't simulate state-changing functions, but we can try to check if the function exists
@@ -378,37 +264,8 @@ cast call \
       throw new Error("Invalid initial supply: cannot be zero");
     }
 
-    let simulationError = null;
-
-    // Convert initialSupply to wei for simulation as well
-    const initialSupplyWeiForSim =
-      BigInt(initialSupply) * BigInt(10) ** BigInt(18);
-
-    // Try to simulate the transaction using cast run to get detailed trace and error information
-    const simulateRunCmd = `
-cast run \
-  --rpc-url "${process.env.RPC_ENDPOINT}" \
-  --private-key "${process.env.PRIVATE_KEY}" \
-  ${factoryAddress} \
-  "register_token(address,string,string,uint256)" \
-  ${tokenAddress} "${name}" "${symbol}" ${initialSupplyWeiForSim} \
-  --trace`.trim();
-
-    try {
-      const simulateRunShell = `bash -lc "${simulateRunCmd.replace(
-        /"/g,
-        '\\"'
-      )}"`;
-      await runCommand(simulateRunShell, { cwd: rootDir, env });
-      console.log("Transaction simulation successful - should proceed");
-    } catch (simErr) {
-      simulationError = `${simErr.stderr || ""}\n${simErr.stdout || ""}`.trim();
-      console.error(
-        "Transaction simulation failed with trace:",
-        simulationError
-      );
-      // Don't throw yet - let the actual send attempt happen to get the full error
-    }
+    // Skip cast run simulation - it's VERY slow (can take minutes) and not necessary
+    // The actual registration will provide clear errors if something is wrong
 
     // Perform the actual registration
     // IMPORTANT: The factory expects initialSupply in wei (like the token's totalSupply)
@@ -428,7 +285,16 @@ cast send \
     const registerShell = `bash -lc "${registerCmd.replace(/"/g, '\\"')}"`;
     let registerResult;
     try {
-      registerResult = await runCommand(registerShell, { cwd: rootDir, env });
+      // Add timeout to prevent hanging (60 seconds should be plenty for Arbitrum)
+      registerResult = await Promise.race([
+        runCommand(registerShell, { cwd: rootDir, env }),
+        new Promise((_, reject) =>
+          setTimeout(
+            () => reject(new Error("Registration timeout after 60 seconds")),
+            60000
+          )
+        ),
+      ]);
     } catch (err) {
       const errorDetails = {
         message: err.error ? err.error.message : String(err),
@@ -439,11 +305,6 @@ cast send \
 
       // Try to decode the error if possible
       let decodedError = errorDetails.stderr || errorDetails.stdout || "";
-
-      // Include simulation error if available
-      if (simulationError) {
-        decodedError = `Simulation error: ${simulationError}. Actual send error: ${decodedError}`;
-      }
 
       // Check for common revert reasons
       if (decodedError.includes("execution reverted")) {
