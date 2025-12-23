@@ -165,6 +165,7 @@ cd "${erc20Dir.replace(/\\/g, "/")}" && \
 cast send \
   --private-key="${process.env.PRIVATE_KEY}" \
   --rpc-url "${process.env.RPC_ENDPOINT}" \
+  --max-fee-per-gas 0.2gwei \
   ${tokenAddress} \
   "init(string,string,uint256)" \
   "${name}" "${symbol}" ${initialSupply}`.trim();
@@ -311,7 +312,7 @@ cast call \
 cast send \
   --private-key="${process.env.PRIVATE_KEY}" \
   --rpc-url "${process.env.RPC_ENDPOINT}" \
-  --legacy \
+  --max-fee-per-gas 0.2gwei \
   ${factoryAddress} \
   "register_token(address,string,string,uint256)" \
   ${tokenAddress} "${name}" "${symbol}" ${initialSupply}`.trim();
