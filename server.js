@@ -3,8 +3,18 @@ const cors = require("cors");
 const dotenv = require("dotenv");
 const { exec } = require("child_process");
 const path = require("path");
+const { ethers } = require("ethers");
 
 dotenv.config({ path: path.join(__dirname, ".env") });
+
+// ABI for Token Factory contract (matching register-token.js and test.js)
+const TOKEN_FACTORY_ABI = [
+  "function registerToken(address token_address, string name, string symbol, uint256 initial_supply)",
+  "function getTotalTokensDeployed() view returns (uint256)",
+  "function getAllDeployedTokens() view returns (address[])",
+  "function getTokenInfo(address token_address) view returns (address, string, string, uint256, uint256)",
+  "event TokenCreated(address indexed tokenAddress, address indexed creator, string name, string symbol, uint256 initialSupply, uint256 timestamp)",
+];
 
 const FACTORY_ADDRESS = "0xed088fd93517b0d0c3a3e4d2e2c419fb58570556";
 
@@ -234,35 +244,21 @@ cargo stylus activate \
       console.warn("Factory verification skipped:", err.message || "timeout");
     }
 
-    // Check if token is already registered - if so, skip registration
+    // Check if token is already registered using ethers.js (like register-token.js)
     try {
-      const checkTokenCmd = `
-cast call \
-  --rpc-url "${process.env.RPC_ENDPOINT}" \
-  ${factoryAddress} \
-  "getTokenInfo(address)" \
-  ${tokenAddress}`.trim();
+      const provider = new ethers.JsonRpcProvider(process.env.RPC_ENDPOINT);
+      const factoryContract = new ethers.Contract(
+        factoryAddress,
+        TOKEN_FACTORY_ABI,
+        provider
+      );
 
-      const checkTokenShell = `bash -lc "${checkTokenCmd.replace(
-        /"/g,
-        '\\"'
-      )}"`;
-      const checkResult = await Promise.race([
-        runCommand(checkTokenShell, { cwd: rootDir, env }),
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error("Check timeout")), 5000)
-        ),
-      ]);
+      const existingTokens = await factoryContract.getAllDeployedTokens();
+      const isAlreadyRegistered = existingTokens.some(
+        (addr) => addr.toLowerCase() === tokenAddress.toLowerCase()
+      );
 
-      const checkOutput = `${checkResult.stdout}\n${checkResult.stderr}`;
-
-      // If call succeeds and returns data, token is already registered
-      if (
-        checkOutput &&
-        !checkOutput.includes("TokenNotFound") &&
-        !checkOutput.includes("error") &&
-        checkOutput.trim().length > 0
-      ) {
+      if (isAlreadyRegistered) {
         console.log(
           "Token is already registered in factory - skipping registration"
         );
@@ -280,13 +276,11 @@ cast call \
         });
       }
     } catch (checkErr) {
-      // TokenNotFound is expected for new tokens - continue with registration
-      if (!checkErr.stderr || !checkErr.stderr.includes("TokenNotFound")) {
-        console.warn(
-          "Could not verify registration status, proceeding:",
-          checkErr.message
-        );
-      }
+      // If check fails, continue anyway - registration will fail if already registered
+      console.warn(
+        "Could not verify registration status, proceeding:",
+        checkErr.message
+      );
     }
 
     // Skip token verification - it's slow and we just deployed it, so it should exist
@@ -319,49 +313,88 @@ cast call \
     // Skip cast run simulation - it's VERY slow (can take minutes) and not necessary
     // The actual registration will provide clear errors if something is wrong
 
-    // Perform the actual registration
+    // Perform the actual registration using ethers.js (like register-token.js)
     // IMPORTANT: The factory expects initialSupply in wei (like the token's totalSupply)
     // Convert human-readable supply to wei (multiply by 10^18)
-    // The token's init() multiplies by 10^18, so the factory should store the same wei amount
-    const initialSupplyWei = BigInt(initialSupply) * BigInt(10) ** BigInt(18);
+    const initialSupplyWei = ethers.parseEther(initialSupply.toString());
 
-    // Gas pricing is handled automatically by cast send
-    const registerCmd = `
-cast send \
-  --private-key="${process.env.PRIVATE_KEY}" \
-  --rpc-url "${process.env.RPC_ENDPOINT}" \
-  ${factoryAddress} \
-  "registerToken(address,string,string,uint256)" \
-  ${tokenAddress} "${name}" "${symbol}" ${initialSupplyWei}`.trim();
-
-    const registerShell = `bash -lc "${registerCmd.replace(/"/g, '\\"')}"`;
-    let registerResult;
     try {
-      // Add timeout to prevent hanging (60 seconds should be plenty for Arbitrum)
-      registerResult = await Promise.race([
-        runCommand(registerShell, { cwd: rootDir, env }),
-        new Promise((_, reject) =>
-          setTimeout(
-            () => reject(new Error("Registration timeout after 60 seconds")),
-            60000
-          )
-        ),
-      ]);
-    } catch (err) {
-      const errorDetails = {
-        message: err.error ? err.error.message : String(err),
-        stdout: err.stdout || "",
-        stderr: err.stderr || "",
+      // Setup provider and wallet using ethers.js
+      const provider = new ethers.JsonRpcProvider(process.env.RPC_ENDPOINT);
+      const wallet = new ethers.Wallet(process.env.PRIVATE_KEY, provider);
+      const factoryContract = new ethers.Contract(
+        factoryAddress,
+        TOKEN_FACTORY_ABI,
+        wallet
+      );
+
+      console.log("Sending registration transaction...");
+
+      // Call registerToken (camelCase as per test.js and register-token.js)
+      const tx = await factoryContract.registerToken(
+        tokenAddress,
+        name,
+        symbol,
+        initialSupplyWei
+      );
+
+      console.log(`Transaction hash: ${tx.hash}`);
+
+      // Wait for transaction confirmation
+      const receipt = await tx.wait();
+      console.log(`Registration confirmed in block ${receipt.blockNumber}`);
+
+      // Try to get TokenCreated event
+      let eventInfo = null;
+      try {
+        const filter = factoryContract.filters.TokenCreated();
+        const events = await factoryContract.queryFilter(
+          filter,
+          receipt.blockNumber
+        );
+        if (events.length > 0) {
+          eventInfo = {
+            tokenAddress: events[0].args.tokenAddress,
+            creator: events[0].args.creator,
+            name: events[0].args.name,
+            symbol: events[0].args.symbol,
+            initialSupply: ethers.formatEther(events[0].args.initialSupply),
+          };
+        }
+      } catch (eventErr) {
+        console.warn("Could not retrieve event:", eventErr.message);
+      }
+
+      const registerResult = {
+        txHash: tx.hash,
+        blockNumber: receipt.blockNumber,
+        gasUsed: receipt.gasUsed.toString(),
+        event: eventInfo,
       };
-      console.error("Token registration failed:", errorDetails);
 
-      // Try to decode the error if possible
-      let decodedError = errorDetails.stderr || errorDetails.stdout || "";
+      return res.json({
+        tokenAddress,
+        deployOutput,
+        activateOutput: `${activateResult.stdout}\n${activateResult.stderr}`,
+        cacheOutput: `${cacheResult.stdout}\n${cacheResult.stderr}`,
+        initOutput: `${initResult.stdout}\n${initResult.stderr}`,
+        registerOutput: JSON.stringify(registerResult, null, 2),
+        success: true,
+        message: "Token deployed and registered successfully",
+      });
+    } catch (err) {
+      console.error("Token registration failed:", err.message);
 
-      // Check for common revert reasons
-      if (decodedError.includes("execution reverted")) {
-        // Try to provide more context based on contract validation checks
-        decodedError +=
+      // Provide detailed error information
+      let errorMsg = err.message;
+      if (err.reason) {
+        errorMsg += ` (Reason: ${err.reason})`;
+      }
+
+      // Check if it's because token is already registered
+      const errorLower = errorMsg.toLowerCase();
+      if (errorLower.includes("revert") || errorLower.includes("require")) {
+        errorMsg +=
           "\nPossible causes:\n" +
           "1. Token already registered in factory\n" +
           "2. Invalid parameters (empty name/symbol, zero supply, zero address)\n" +
@@ -369,13 +402,11 @@ cast send \
           "4. Token contract not fully initialized";
       }
 
-      // Provide detailed error information
       throw new Error(
         `Token registration FAILED (required step). ` +
           `Factory: ${factoryAddress}, Token: ${tokenAddress}, ` +
           `Name: "${name}", Symbol: "${symbol}", Supply: ${initialSupply}. ` +
-          `Error: ${errorDetails.message}. ` +
-          `\nDetails: ${decodedError}`
+          `Error: ${errorMsg}`
       );
     }
 
