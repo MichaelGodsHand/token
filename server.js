@@ -57,7 +57,8 @@ function extractContractAddress(output) {
 }
 
 // POST /deploy-token
-// body: { name, symbol, initialSupply, factoryAddress }
+// body: { name, symbol, initialSupply, factoryAddress, privateKey (optional), rpcEndpoint (optional) }
+// Note: privateKey and rpcEndpoint can be provided in request body or as environment variables
 app.post("/deploy-token", async (req, res) => {
   let { name, symbol, initialSupply, factoryAddress } = req.body || {};
 
@@ -76,18 +77,36 @@ app.post("/deploy-token", async (req, res) => {
       .json({ error: "name, symbol and initialSupply are required" });
   }
 
-  if (!process.env.PRIVATE_KEY || !process.env.RPC_ENDPOINT) {
-    return res.status(500).json({
+  // Get private key and RPC endpoint - priority: request body > env var
+  const privateKey = req.body.privateKey || process.env.PRIVATE_KEY;
+  const rpcEndpoint = req.body.rpcEndpoint || process.env.RPC_ENDPOINT;
+
+  if (!privateKey || !rpcEndpoint) {
+    return res.status(400).json({
       error:
-        "PRIVATE_KEY and RPC_ENDPOINT must be set as environment variables",
+        "PRIVATE_KEY and RPC_ENDPOINT are required (provide in request body as 'privateKey' and 'rpcEndpoint', or set as environment variables)",
+    });
+  }
+
+  // Validate private key format (should be 64 hex characters, optionally with 0x prefix)
+  const privateKeyClean = privateKey.startsWith("0x")
+    ? privateKey.slice(2)
+    : privateKey;
+  if (
+    privateKeyClean.length !== 64 ||
+    !/^[0-9a-fA-F]+$/.test(privateKeyClean)
+  ) {
+    return res.status(400).json({
+      error:
+        "Invalid private key format. Private key must be 64 hex characters (with or without 0x prefix)",
     });
   }
 
   // Prepare environment variables for child processes
   const env = {
     ...process.env,
-    PRIVATE_KEY: process.env.PRIVATE_KEY,
-    RPC_ENDPOINT: process.env.RPC_ENDPOINT,
+    PRIVATE_KEY: privateKey,
+    RPC_ENDPOINT: rpcEndpoint,
   };
 
   // Directories for contracts
@@ -101,8 +120,8 @@ app.post("/deploy-token", async (req, res) => {
     const deployCmd = `
 cd "${erc20Dir.replace(/\\/g, "/")}" && \
 cargo stylus deploy \
-  --private-key="${process.env.PRIVATE_KEY}" \
-  --endpoint="${process.env.RPC_ENDPOINT}" \
+  --private-key="${privateKey}" \
+  --endpoint="${rpcEndpoint}" \
   --no-verify \
   --max-fee-per-gas-gwei 0.1`.trim();
 
@@ -126,8 +145,8 @@ cargo stylus deploy \
 cd "${erc20Dir.replace(/\\/g, "/")}" && \
 cargo stylus activate \
   --address ${tokenAddress} \
-  --private-key="${process.env.PRIVATE_KEY}" \
-  --endpoint="${process.env.RPC_ENDPOINT}" \
+  --private-key="${privateKey}" \
+  --endpoint="${rpcEndpoint}" \
   --max-fee-per-gas-gwei 0.1`.trim();
 
     const activateShell = `bash -lc "${activateCmd.replace(/"/g, '\\"')}"`;
@@ -150,8 +169,8 @@ cargo stylus activate \
 cd "${erc20Dir.replace(/\\/g, "/")}" && \
 cargo stylus cache bid \
   ${tokenAddress} 1 \
-  --private-key="${process.env.PRIVATE_KEY}" \
-  --endpoint="${process.env.RPC_ENDPOINT}" \
+  --private-key="${privateKey}" \
+  --endpoint="${rpcEndpoint}" \
   --max-fee-per-gas-gwei 0.1`.trim();
 
     const cacheShell = `bash -lc "${cacheCmd.replace(/"/g, '\\"')}"`;
@@ -174,8 +193,8 @@ cargo stylus cache bid \
     const initCmd = `
 cd "${erc20Dir.replace(/\\/g, "/")}" && \
 cast send \
-  --private-key="${process.env.PRIVATE_KEY}" \
-  --rpc-url "${process.env.RPC_ENDPOINT}" \
+  --private-key="${privateKey}" \
+  --rpc-url "${rpcEndpoint}" \
   ${tokenAddress} \
   "init(string,string,uint256)" \
   "${name}" "${symbol}" ${initialSupply}`.trim();
@@ -199,8 +218,8 @@ cast send \
 cd "${factoryDir.replace(/\\/g, "/")}" && \
 cargo stylus activate \
   --address ${factoryAddress} \
-  --private-key="${process.env.PRIVATE_KEY}" \
-  --endpoint="${process.env.RPC_ENDPOINT}" \
+  --private-key="${privateKey}" \
+  --endpoint="${rpcEndpoint}" \
   --max-fee-per-gas-gwei 0.1`.trim();
 
     const factoryActivateShell = `bash -lc "${factoryActivateCmd.replace(
@@ -223,7 +242,7 @@ cargo stylus activate \
 
     // Quick factory contract verification (non-blocking, timeout after 5 seconds)
     const codeCheckCmd =
-      `cast code ${factoryAddress} --rpc-url "${process.env.RPC_ENDPOINT}"`.trim();
+      `cast code ${factoryAddress} --rpc-url "${rpcEndpoint}"`.trim();
     try {
       const codeCheckShell = `bash -lc "${codeCheckCmd.replace(/"/g, '\\"')}"`;
       const codeResult = await Promise.race([
@@ -246,7 +265,7 @@ cargo stylus activate \
 
     // Check if token is already registered using ethers.js (like register-token.js)
     try {
-      const provider = new ethers.JsonRpcProvider(process.env.RPC_ENDPOINT);
+      const provider = new ethers.JsonRpcProvider(rpcEndpoint);
       const factoryContract = new ethers.Contract(
         factoryAddress,
         TOKEN_FACTORY_ABI,
@@ -320,8 +339,8 @@ cargo stylus activate \
 
     try {
       // Setup provider and wallet using ethers.js
-      const provider = new ethers.JsonRpcProvider(process.env.RPC_ENDPOINT);
-      const wallet = new ethers.Wallet(process.env.PRIVATE_KEY, provider);
+      const provider = new ethers.JsonRpcProvider(rpcEndpoint);
+      const wallet = new ethers.Wallet(privateKey, provider);
       const factoryContract = new ethers.Contract(
         factoryAddress,
         TOKEN_FACTORY_ABI,
